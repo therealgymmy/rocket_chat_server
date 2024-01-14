@@ -3,6 +3,7 @@ extern crate rocket;
 
 use rocket::serde::{json::Json, Deserialize, Serialize};
 use rocket::State;
+use rocket_cors::{AllowedOrigins, CorsOptions};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::sync::Mutex;
@@ -83,10 +84,15 @@ fn get_messages(state: &State<ChatState>) -> Json<Vec<GetMessage>> {
 
 #[launch]
 fn rocket() -> _ {
+    let cors = CorsOptions::default()
+        .allowed_origins(AllowedOrigins::some_exact(&["http://localhost:19006"]))
+        .to_cors()
+        .unwrap();
     let chat_state = ChatState {
         messages: Mutex::new(load_messages().expect("Failed to load messages")),
     };
     rocket::build()
+        .attach(cors)
         .manage(chat_state)
         .mount("/", routes![index, post_message, get_messages])
 }
