@@ -6,6 +6,8 @@ use rocket::State;
 use rocket_cors::{AllowedOrigins, CorsOptions};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
+use std::net::IpAddr;
+use std::str::FromStr;
 use std::sync::Mutex;
 
 const DATA_FILE: &str = "chat_data.json";
@@ -38,6 +40,7 @@ fn save_messages(messages: &Vec<Message>) -> io::Result<()> {
 struct Message {
     username: String,
     content: String,
+    timestamp: String,
 }
 
 struct ChatState {
@@ -49,6 +52,7 @@ struct ChatState {
 struct PostMessage {
     username: String,
     content: String,
+    timestamp: String,
 }
 
 #[derive(Serialize)]
@@ -56,6 +60,7 @@ struct PostMessage {
 struct GetMessage {
     username: String,
     content: String,
+    timestamp: String,
 }
 
 #[post("/message", format = "json", data = "<message>")]
@@ -64,6 +69,7 @@ fn post_message(message: Json<PostMessage>, state: &State<ChatState>) {
     messages.push(Message {
         username: message.username.clone(),
         content: message.content.clone(),
+        timestamp: message.timestamp.clone(),
     });
     save_messages(&messages).expect("Failed to save messages")
 }
@@ -77,6 +83,7 @@ fn get_messages(state: &State<ChatState>) -> Json<Vec<GetMessage>> {
             .map(|msg| GetMessage {
                 username: msg.username.clone(),
                 content: msg.content.clone(),
+                timestamp: msg.timestamp.clone(),
             })
             .collect(),
     )
@@ -84,6 +91,7 @@ fn get_messages(state: &State<ChatState>) -> Json<Vec<GetMessage>> {
 
 #[launch]
 fn rocket() -> _ {
+    // This is only needed for local testing using browser for react-native frontend
     let cors = CorsOptions::default()
         .allowed_origins(AllowedOrigins::some_exact(&["http://localhost:19006"]))
         .to_cors()
@@ -92,6 +100,10 @@ fn rocket() -> _ {
         messages: Mutex::new(load_messages().expect("Failed to load messages")),
     };
     rocket::build()
+        .configure(rocket::Config {
+            address: IpAddr::from_str("0.0.0.0").unwrap(),
+            ..Default::default()
+        })
         .attach(cors)
         .manage(chat_state)
         .mount("/", routes![index, post_message, get_messages])
