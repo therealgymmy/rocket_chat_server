@@ -56,6 +56,7 @@ impl<'r> FromRequest<'r> for AuthenticatedUser {
         req: &'r Request<'_>,
     ) -> request::Outcome<AuthenticatedUser, Self::Error> {
         let authorization_header = req.headers().get_one("Authorization");
+        println!("debug: token: {:?}", authorization_header);
 
         let token = match authorization_header {
             Some(header) => {
