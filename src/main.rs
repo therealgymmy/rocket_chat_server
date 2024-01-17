@@ -33,6 +33,13 @@ fn create_db() -> rusqlite::Result<()> {
  * User authentication
  */
 #[derive(Serialize, Deserialize)]
+struct UserRegistration {
+    email: String,
+    username: String,
+    password: String,
+}
+
+#[derive(Serialize, Deserialize)]
 struct User {
     username: String,
     password: String,
@@ -88,9 +95,32 @@ impl<'r> FromRequest<'r> for AuthenticatedUser {
     }
 }
 
-fn register_user(username: String, password: String) -> Result<(), String> {
+fn register_user(email: String, username: String, password: String) -> Result<(), String> {
+    // TODO: Save user email into the chat db
+
     let password_hash = hash(password, bcrypt::DEFAULT_COST).map_err(|e| e.to_string())?;
     let conn = Connection::open("chat.db").map_err(|e| e.to_string())?;
+
+    // let num_rows = conn
+    //     .execute(
+    //         "SELECT username FROM users WHERE username = ?1",
+    //         params![username],
+    //     )
+    //     .map_err(|e| e.to_string())?;
+    // if num_rows > 0 {
+    //     return Err("User already exists".to_string());
+    // }
+    let mut check_user = conn
+        .prepare("SELECT username FROM users WHERE username = ?1")
+        .map_err(|e| e.to_string())?;
+    let user_exists = check_user
+        .exists(params![&username])
+        .map_err(|e| e.to_string())?;
+    println!("dbg: {:?}", user_exists);
+    if user_exists {
+        // Handle the case where the username already exists, e.g., return an error
+        return Err("Username already exists".to_string());
+    }
 
     conn.execute(
         "INSERT INTO users (username, password_hash) VALUES (?1, ?2)",
@@ -140,8 +170,9 @@ fn authenticate_user(username: String, password: String) -> Result<String, Strin
 }
 
 #[post("/register", format = "json", data = "<user_data>")]
-async fn register(user_data: Json<User>) -> Json<Result<(), String>> {
+async fn register(user_data: Json<UserRegistration>) -> Json<Result<(), String>> {
     Json(register_user(
+        user_data.email.clone(),
         user_data.username.clone(),
         user_data.password.clone(),
     ))
