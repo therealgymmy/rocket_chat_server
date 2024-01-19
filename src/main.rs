@@ -16,13 +16,25 @@ use std::str::FromStr;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+const DB_NAME: &str = "chat.db";
+
 fn create_db() -> rusqlite::Result<()> {
-    let conn = Connection::open("chat.db")?;
+    let conn = Connection::open(DB_NAME)?;
     conn.execute(
         "CREATE TABLE IF NOT EXISTS users (
                   id INTEGER PRIMARY KEY,
                   username TEXT NOT NULL UNIQUE,
+                  email TEXT NOT NULL,
                   password_hash TEXT NOT NULL
+         )",
+        [],
+    )?;
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS messages (
+                  id INTEGER PRIMARY KEY,
+                  username TEXT NOT NULL,
+                  content TEXT NOT NULL,
+                  timestamp TEXT NOT NULL
          )",
         [],
     )?;
@@ -96,20 +108,9 @@ impl<'r> FromRequest<'r> for AuthenticatedUser {
 }
 
 fn register_user(email: String, username: String, password: String) -> Result<(), String> {
-    // TODO: Save user email into the chat db
-
     let password_hash = hash(password, bcrypt::DEFAULT_COST).map_err(|e| e.to_string())?;
-    let conn = Connection::open("chat.db").map_err(|e| e.to_string())?;
+    let conn = Connection::open(DB_NAME).map_err(|e| e.to_string())?;
 
-    // let num_rows = conn
-    //     .execute(
-    //         "SELECT username FROM users WHERE username = ?1",
-    //         params![username],
-    //     )
-    //     .map_err(|e| e.to_string())?;
-    // if num_rows > 0 {
-    //     return Err("User already exists".to_string());
-    // }
     let mut check_user = conn
         .prepare("SELECT username FROM users WHERE username = ?1")
         .map_err(|e| e.to_string())?;
@@ -123,8 +124,8 @@ fn register_user(email: String, username: String, password: String) -> Result<()
     }
 
     conn.execute(
-        "INSERT INTO users (username, password_hash) VALUES (?1, ?2)",
-        params![username, password_hash],
+        "INSERT INTO users (username, email, password_hash) VALUES (?1, ?2, ?3)",
+        params![username, email, password_hash],
     )
     .map_err(|e| e.to_string())?;
 
@@ -132,7 +133,7 @@ fn register_user(email: String, username: String, password: String) -> Result<()
 }
 
 fn authenticate_user(username: String, password: String) -> Result<String, String> {
-    let conn = Connection::open("chat.db").map_err(|e| e.to_string())?;
+    let conn = Connection::open(DB_NAME).map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare("SELECT password_hash FROM users WHERE username = ?1")
         .map_err(|e| e.to_string())?;
@@ -189,29 +190,32 @@ async fn login(login_data: Json<User>) -> Json<Result<String, String>> {
 /*
  * Save and load messages
  */
-const DATA_FILE: &str = "chat_data.json";
-
-fn load_messages() -> io::Result<Vec<Message>> {
-    match File::open(DATA_FILE) {
-        Ok(mut file) => {
-            let mut data = String::new();
-            file.read_to_string(&mut data)?;
-            let messages = serde_json::from_str(&data).unwrap_or_else(|_| vec![]);
-            Ok(messages)
-        }
-        Err(_) => Ok(vec![]), // If file doesn't exist, start with an empty vector
-    }
+fn load_messages() -> Result<Vec<Message>, String> {
+    let conn = Connection::open(DB_NAME).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT username, content, timestamp FROM messages")
+        .map_err(|e| e.to_string())?;
+    let messages = stmt
+        .query_map([], |row| {
+            Ok(Message {
+                username: row.get(0)?,
+                content: row.get(1)?,
+                timestamp: row.get(2)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    Ok(messages)
 }
 
-fn save_messages(messages: &Vec<Message>) -> io::Result<()> {
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(DATA_FILE)?;
-
-    let data = serde_json::to_string(messages)?;
-    file.write_all(data.as_bytes())?;
+fn save_message(msg: &Message) -> Result<(), String> {
+    let conn = Connection::open(DB_NAME).map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT INTO messages (username, content, timestamp) VALUES (?1, ?2, ?3)",
+        params![msg.username, msg.content, msg.timestamp],
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -247,13 +251,14 @@ struct GetMessage {
 
 #[post("/message", format = "json", data = "<message>")]
 fn post_message(user: AuthenticatedUser, message: Json<PostMessage>, state: &State<ChatState>) {
-    let mut messages = state.messages.lock().unwrap();
-    messages.push(Message {
+    let msg = Message {
         username: message.username.clone(),
         content: message.content.clone(),
         timestamp: message.timestamp.clone(),
-    });
-    save_messages(&messages).expect("Failed to save messages")
+    };
+    save_message(&msg).expect("Failed to save messages");
+    let mut messages = state.messages.lock().unwrap();
+    messages.push(msg);
 }
 
 #[get("/messages")]
